@@ -1,0 +1,44 @@
+# Test your FastAPI endpoints
+
+GET http://127.0.0.1:8000/
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/login
+Content-Type: application/json
+
+{"username": "admin", "password": "123456"}
+
+###
+
+GET http://127.0.0.1:8000/history/admin
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/chat
+Content-Type: application/json
+
+{"user_id": "admin", "question": "stdio transport的优点是什么？"}
+
+###
+
+POST http://127.0.0.1:8000/chat
+Content-Type: application/json
+
+{"user_id": "admin", "question": "MCP协议推荐版本是什么？"}
+
+###
+
+POST http://127.0.0.1:8000/chat
+Content-Type: application/json
+
+{"user_id": "admin", "question": "帮我删除 data 目录下的 mcp_advanced.md"}
+
+###
+
+POST http://127.0.0.1:8000/approve
+Content-Type: application/json
+
+{"user_id": "admin", "decision": "approve"}
