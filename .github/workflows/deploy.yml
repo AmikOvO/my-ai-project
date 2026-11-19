@@ -2,7 +2,7 @@ name: Build and Deploy to Aliyun ECS
 
 on:
   push:
-    branches: [ main ] # 当你推送到 main 分支时触发
+    branches: [ main ]
 
 jobs:
   build-and-deploy:
@@ -10,27 +10,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
-      - name: Diagnose DNS resolution
-        run: |
-          echo "Checking DNS for ${{ secrets.ACR_REGISTRY }}"
-          nslookup ${{ secrets.ACR_REGISTRY }} || true
-          ping -c 2 ${{ secrets.ACR_REGISTRY }} || true
-          
-      - name: Log in to Aliyun ACR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.ACR_REGISTRY }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Build and push Backend
+      - name: Login to ACR, Build and Push (Pure Shell)
         run: |
+          # 1. 打印一下变量长度，防止有肉眼看不见的空格！
+          echo "Registry length is: ${#ACR_REGISTRY}"
+          
+          # 2. 使用原生命令登录
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+          
+          # 3. 构建并推送后端
           docker build -t ${{ secrets.ACR_REGISTRY }}/amiko-project/backend:latest ./backend
           docker push ${{ secrets.ACR_REGISTRY }}/amiko-project/backend:latest
-
-      - name: Build and push Frontend
-        run: |
+          
+          # 4. 构建并推送前端
           docker build -t ${{ secrets.ACR_REGISTRY }}/amiko-project/frontend:latest ./frontend
           docker push ${{ secrets.ACR_REGISTRY }}/amiko-project/frontend:latest
 
@@ -41,12 +34,15 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           command_timeout: 10m
-          # 加入这一行，把密码传进服务器
           envs: ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
-            # 使用传进来的环境变量登录
+            # 服务器端也是用纯 Shell 登录
             echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
             docker compose pull
             docker compose up -d
             docker image prune -f
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
