@@ -1,0 +1,46 @@
+name: Build and Deploy to Aliyun ECS
+
+on:
+  push:
+    branches: [ main ] # 当你推送到 main 分支时触发
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push Backend
+        run: |
+          docker build -t ${{ secrets.ACR_REGISTRY }}/amiko-project/backend:latest ./backend
+          docker push ${{ secrets.ACR_REGISTRY }}/amiko-project/backend:latest
+
+      - name: Build and push Frontend
+        run: |
+          docker build -t ${{ secrets.ACR_REGISTRY }}/amiko-project/frontend:latest ./frontend
+          docker push ${{ secrets.ACR_REGISTRY }}/amiko-project/frontend:latest
+
+      - name: Deploy on ECS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            # 登录内网 ACR (使用同样的账号密码)
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+            # 拉取最新镜像并重启容器
+            docker compose pull
+            docker compose up -d
+            # 清理旧镜像（可选，节省服务器空间）
+            docker image prune -f
