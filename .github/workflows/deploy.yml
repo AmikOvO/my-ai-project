@@ -10,7 +10,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+        
+      - name: Diagnose DNS resolution
+        run: |
+          echo "Checking DNS for ${{ secrets.ACR_REGISTRY }}"
+          nslookup ${{ secrets.ACR_REGISTRY }} || true
+          ping -c 2 ${{ secrets.ACR_REGISTRY }} || true
+          
       - name: Log in to Aliyun ACR
         uses: docker/login-action@v3
         with:
