@@ -1,7 +1,7 @@
 services:
   backend:
     # 注意这里用了带 -vpc 的地址
-    image: cri-3djr1rhtcfvq0io6-vpc.cn-beijing.personal.cr.aliyuncs.com/amiko-project/backend:latest
+    image: registry.cn-beijing.aliyuncs.com/amiko-project/backend:latest
     container_name: my_backend
     restart: always
     env_file:
@@ -11,7 +11,7 @@ services:
 
   frontend:
     # 注意这里用了带 -vpc 的地址
-    image: cri-3djr1rhtcfvq0io6-vpc.cn-beijing.personal.cr.aliyuncs.com/amiko-project/frontend:latest
+    image: registry.cn-beijing.aliyuncs.com/amiko-project/frontend:latest
     container_name: my_frontend
     restart: always
     ports:
