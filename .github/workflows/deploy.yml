@@ -19,17 +19,21 @@ jobs:
       - name: Login to ACR, Build and Push (Pure Shell)
         run: |
           echo "Registry length is: ${#ACR_REGISTRY}"
-          # 如果长度是0，直接报错退出，不执行后面的命令
-          if [ "${#ACR_REGISTRY}" -eq 0 ]; then
-            echo "❌ ERROR: ACR_REGISTRY is empty!"
-            exit 1
-          fi
           
+          # 👇 关键一步：强行把域名绑定到查到的 IP（记得把 8.8.8.8 换成你刚才查到的真实 IP！）
+          echo "114.114.114.114 $ACR_REGISTRY" | sudo tee -a /etc/hosts
+          
+          # 验证一下 hosts 是否生效
+          ping -c 2 $ACR_REGISTRY
+
+          # 开始登录并推送
           echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
           
+          # 构建后端
           docker build -t $ACR_REGISTRY/amiko-project/backend:latest ./backend
           docker push $ACR_REGISTRY/amiko-project/backend:latest
           
+          # 构建前端
           docker build -t $ACR_REGISTRY/amiko-project/frontend:latest ./frontend
           docker push $ACR_REGISTRY/amiko-project/frontend:latest
 
