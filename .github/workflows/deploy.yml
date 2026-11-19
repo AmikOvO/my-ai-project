@@ -41,12 +41,12 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           command_timeout: 10m
+          # 加入这一行，把密码传进服务器
+          envs: ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
-            # 登录内网 ACR (使用同样的账号密码)
-            echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} -u "${{ secrets.ACR_USERNAME }}" --password-stdin
-            # 拉取最新镜像并重启容器
+            # 使用传进来的环境变量登录
+            echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
             docker compose pull
             docker compose up -d
-            # 清理旧镜像（可选，节省服务器空间）
             docker image prune -f
