@@ -20,13 +20,6 @@ jobs:
         run: |
           echo "Registry length is: ${#ACR_REGISTRY}"
           
-          # 👇 关键一步：强行把域名绑定到查到的 IP（记得把 8.8.8.8 换成你刚才查到的真实 IP！）
-          echo "114.114.114.114 $ACR_REGISTRY" | sudo tee -a /etc/hosts
-          
-          # 验证一下 hosts 是否生效
-          ping -c 2 $ACR_REGISTRY
-
-          # 开始登录并推送
           echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
           
           # 构建后端
