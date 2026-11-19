@@ -7,25 +7,31 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    # 👇 把环境变量声明放在 Job 层面，所有步骤都能用
+    env:
+      ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Login to ACR, Build and Push (Pure Shell)
         run: |
-          # 1. 打印一下变量长度，防止有肉眼看不见的空格！
           echo "Registry length is: ${#ACR_REGISTRY}"
+          # 如果长度是0，直接报错退出，不执行后面的命令
+          if [ "${#ACR_REGISTRY}" -eq 0 ]; then
+            echo "❌ ERROR: ACR_REGISTRY is empty!"
+            exit 1
+          fi
           
-          # 2. 使用原生命令登录
-          echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+          echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
           
-          # 3. 构建并推送后端
-          docker build -t ${{ secrets.ACR_REGISTRY }}/amiko-project/backend:latest ./backend
-          docker push ${{ secrets.ACR_REGISTRY }}/amiko-project/backend:latest
+          docker build -t $ACR_REGISTRY/amiko-project/backend:latest ./backend
+          docker push $ACR_REGISTRY/amiko-project/backend:latest
           
-          # 4. 构建并推送前端
-          docker build -t ${{ secrets.ACR_REGISTRY }}/amiko-project/frontend:latest ./frontend
-          docker push ${{ secrets.ACR_REGISTRY }}/amiko-project/frontend:latest
+          docker build -t $ACR_REGISTRY/amiko-project/frontend:latest ./frontend
+          docker push $ACR_REGISTRY/amiko-project/frontend:latest
 
       - name: Deploy on ECS via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -34,15 +40,11 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           command_timeout: 10m
+          # 传变量给服务器
           envs: ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
-            # 服务器端也是用纯 Shell 登录
             echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
             docker compose pull
             docker compose up -d
             docker image prune -f
-        env:
-          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
-          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
