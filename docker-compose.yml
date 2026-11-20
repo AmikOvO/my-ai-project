@@ -1,6 +1,5 @@
 services:
   backend:
-    # 注意这里用了带 -vpc 的地址
     image: registry.cn-beijing.aliyuncs.com/amiko-project/backend:latest
     container_name: my_backend
     restart: always
@@ -10,7 +9,6 @@ services:
       - "8000"
 
   frontend:
-    # 注意这里用了带 -vpc 的地址
     image: registry.cn-beijing.aliyuncs.com/amiko-project/frontend:latest
     container_name: my_frontend
     restart: always

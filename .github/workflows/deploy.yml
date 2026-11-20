@@ -7,7 +7,6 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    # 👇 把环境变量声明放在 Job 层面，所有步骤都能用
     env:
       ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
       ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
@@ -20,6 +19,7 @@ jobs:
         run: |
           echo "Registry length is: ${#ACR_REGISTRY}"
           
+          # 推送必须登录（即使是公开仓库）
           echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
           
           # 构建后端
@@ -37,11 +37,9 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           command_timeout: 10m
-          # 传变量给服务器
-          envs: ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
-            echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
+            # 👇 因为仓库是公开的，这里直接去掉 docker login，直接拉取
             docker compose pull
             docker compose up -d
             docker image prune -f
