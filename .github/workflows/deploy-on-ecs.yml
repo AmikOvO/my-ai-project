@@ -1,0 +1,80 @@
+name: Deploy (ECS 本地构建)
+
+# 这是当前实际生效的部署流水线：
+#   GitHub Actions 只负责「传源码」，镜像在 ECS 上本地构建，不经过 ACR。
+# 之所以这么设计：GitHub 托管 Runner 在境外，docker login 阿里云 ACR 一直被
+# 403 拒绝（凭证本身有效，是网络层拦截）。改为本地构建后完全不依赖该链路。
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 传输源码并在 ECS 构建
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: 打包源码（排除依赖与产物）
+        run: |
+          tar --exclude='./.git' --exclude='./frontend/node_modules' \
+              --exclude='./frontend/dist' --exclude='./backend/__pycache__' \
+              -czf deploy-src.tgz .
+          ls -lh deploy-src.tgz
+
+      - name: 上传源码到服务器
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "deploy-src.tgz"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
+
+      - name: 服务器构建并启动
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 30m
+          envs: DEPLOY_PATH
+          script: |
+            set -e
+            mkdir -p "${DEPLOY_PATH}"
+            cd "${DEPLOY_PATH}"
+            tar xzf deploy-src.tgz && rm -f deploy-src.tgz
+
+            # 向量模型需要提前放好（88MB，不适合每次传输）
+            if [ ! -f "chroma-model/all-MiniLM-L6-v2/onnx/model.onnx" ]; then
+              echo "⚠️ 未找到本地向量模型，容器启动时会尝试联网下载（国内可能失败）"
+            fi
+
+            docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+            docker image prune -f
+            docker compose -f docker-compose.yml -f docker-compose.build.yml ps
+
+      - name: 冒烟检查
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            for i in $(seq 1 30); do
+              curl -fsS -o /dev/null http://127.0.0.1/ && break
+              sleep 3
+            done
+            echo "前端首页:   $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)"
+            echo "后端 /api:  $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/api/)"
+            docker inspect -f 'backend health = {{.State.Health.Status}}' my_backend || true
+            docker logs --tail 30 my_backend || true

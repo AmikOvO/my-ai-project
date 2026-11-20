@@ -1,3 +1,4 @@
+# 本文件由 Windows 环境 pip freeze 生成；pywin32 为 Windows 专属包，为保证 Linux 镜像可构建已移除。
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.5
 aiohttp-retry==2.9.1
@@ -89,7 +90,6 @@ pyproject_hooks==1.3.3
 python-dateutil==4.0.0
 python-dotenv==1.2.4
 python-multipart==0.0.33
-pywin32==312
 PyYAML==6.0.3
 referencing==0.37.0
 regex==2026.11.9

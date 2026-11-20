@@ -1,8 +1,9 @@
-name: Build and Deploy to Aliyun ECS
+name: Deploy via ACR (备用方案)
 
+# ⚠️ 默认不自动触发。当前推荐用 deploy-on-ecs.yml（在 ECS 本地构建）。
+# 本文件保留 ACR 方案：等 ACR 公网访问控制放开、或改用国内 self-hosted runner 后，
+# 把下面的 workflow_dispatch 改回 push 即可启用「云端构建 + 推送镜像」模式。
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 # 同一时间只跑一条部署流水线，避免两次 push 交叉部署
