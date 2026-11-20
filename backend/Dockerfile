@@ -22,13 +22,15 @@ RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
         --extra-index-url https://pypi.org/simple \
         -r requirements.txt
 
-# 复制业务代码（.dockerignore 已排除缓存/本地环境）
-COPY . .
-
-# 预热 chromadb 默认向量模型（all-MiniLM-L6-v2）。
-# 不预热的话，首次 embedding 会在服务器上联网下载模型，国内 ECS 经常超时导致 RAG 接口 500。
+# 预热 chromadb 默认向量模型（all-MiniLM-L6-v2），下载约 79MB。
+# 必须放在 COPY . . 之前：否则每次改代码都会让这层缓存失效，白白多等几分钟。
+# 产物落在 /root/.cache/chroma，容器运行时可直接复用（生产环境另有只读卷覆盖此目录）。
+# 下载失败不阻塞构建，运行时再尝试。
 RUN python -c "import chromadb; c = chromadb.PersistentClient(path='/tmp/warmup'); c.get_or_create_collection('warmup').upsert(ids=['1'], documents=['warmup'])" \
     || echo "WARN: 向量模型预热失败，运行时将尝试重新下载"
+
+# 复制业务代码（.dockerignore 已排除缓存/本地环境）
+COPY . .
 
 EXPOSE 8000
 
