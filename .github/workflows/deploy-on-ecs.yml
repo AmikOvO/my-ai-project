@@ -23,9 +23,12 @@ jobs:
 
       - name: 打包源码（排除依赖与产物）
         run: |
+          # 注意：归档文件必须放在仓库目录之外，否则 tar 会读到自身导致
+          # "file changed as we read it" 并返回退出码 1
           tar --exclude='./.git' --exclude='./frontend/node_modules' \
               --exclude='./frontend/dist' --exclude='./backend/__pycache__' \
-              -czf deploy-src.tgz .
+              -czf /tmp/deploy-src.tgz .
+          cp /tmp/deploy-src.tgz ./deploy-src.tgz
           ls -lh deploy-src.tgz
 
       - name: 上传源码到服务器
@@ -59,7 +62,15 @@ jobs:
               echo "⚠️ 未找到本地向量模型，容器启动时会尝试联网下载（国内可能失败）"
             fi
 
-            docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+            if ! docker compose -f docker-compose.yml -f docker-compose.build.yml build > /tmp/build.log 2>&1; then
+              echo "---- 构建失败，末尾日志 ----"
+              tail -40 /tmp/build.log
+              msg=$(tail -c 1000 /tmp/build.log | tr -d '\r' | tr '\n' ' ' | sed 's/%/%25/g')
+              echo "::error title=ECS 构建失败::${msg}"
+              exit 1
+            fi
+
+            docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
             docker image prune -f
             docker compose -f docker-compose.yml -f docker-compose.build.yml ps
 
