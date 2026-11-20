@@ -80,14 +80,17 @@ jobs:
           echo ""
           if [ "${tok_code}" = "200" ]; then
             echo "结论：凭证正确（已拿到 token），docker login 仍失败 => 是网络层/访问控制拦截，不是密码问题。"
+            concl="凭证有效，登录被网络层拦截（公网访问控制白名单 / 境外 IP 限制）"
             echo "下一步：ACR 控制台 -> 访问控制 -> 关闭『公网访问入口』白名单，或白名单设为 0.0.0.0/0。"
             echo "       若确认已关闭仍 403，说明该账号的个人版实例不允许境外 IP 直连，"
             echo "       请改用 ECS self-hosted runner，或走 docker-compose.build.yml 在服务器本地构建。"
           else
             echo "结论：鉴权接口拒绝了凭证（4xx），凭证或实例域名不匹配。"
+            concl="凭证被鉴权服务拒绝"
             echo "下一步：确认登录域名与实例类型一致；固定密码是否被重置；RAM 子账号需授予 AliyunContainerRegistryFullAccess。"
           fi
-          echo "::error::ACR 登录失败（诊断输出见上）"
+          body=$(sed -E 's/"token":"[^"]*"/"token":"<hidden>"/g' /tmp/token.json 2>/dev/null | tr -d '\r\n' | cut -c1-180)
+          echo "::error title=ACR 诊断::token_http=${tok_code} | ${concl}%0Arealm=${realm}%0Aservice=${service}%0Aresp=${body}"
           exit 1
 
       - name: 构建并推送后端镜像
