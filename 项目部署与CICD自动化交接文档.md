@@ -72,6 +72,11 @@ resp={"access_token":"***...            ← 阿里云鉴权服务已签发 token
 
 如果以后仍想用 ACR 方案（比如买了国内 self-hosted runner），把 `.github/workflows/deploy.yml` 的 `on: workflow_dispatch` 改回 `push: branches: [main]` 即可，那个工作流已经写好并在诊断中验证过预检/重试逻辑。
 
+**补充：ACR 上的镜像仓库可以改回私有了。** 11/19 曾把 `amiko-project/backend`、`amiko-project/frontend` 设为「公开」来绕 403，但公开/私有与 403 无关（403 是公网访问控制/IP 层）。
+现在的自动部署完全不经过 ACR，备用 ACR 工作流的 push 和服务器 pull 都带了 `docker login`，所以改私有不影响任何链路。
+建议：ACR 控制台 → 制品仓库 → 操作列点「置为私有」；
+若这两个仓库里推送过 11/20 之前的镜像（当时 Key 还硬编码在 `main.py`），镜像层里带着旧 Key，公开期间可被匿名拉取 —— 建议一并删除这些旧镜像。
+
 ---
 
 ## 四、现在的部署方式
@@ -125,7 +130,8 @@ docker exec my_backend printenv DEEPSEEK_API_KEY   # 确认已注入
 ```
 
 > 代码中**已删除硬编码 Key**，只认环境变量；服务器 `/opt/app/.env` 已写入当前 Key（600 权限，不进仓库）。
-> 切记：该 Key 此前明文提交在公开仓库里，**必须去 DeepSeek 控制台轮换**，否则任何人都能拿它刷额度。
+> 切记：该 Key 此前明文提交在 **GitHub 公开仓库**（`AmikOvO/my-ai-project`，2026-11-20 10:37 由提交 `84adb6e 公开仓库` 转为 public）里，
+> **必须去 DeepSeek 控制台轮换**，否则任何人都能拿它刷额度。注意：这里说的是 GitHub 仓库，与阿里云 ACR 的仓库可见性无关。
 
 ---
 
@@ -164,7 +170,7 @@ cd /opt/app && docker compose -f docker-compose.yml -f docker-compose.build.yml 
 ## 八、已知遗留（不影响本次上线）
 
 1. **DeepSeek 余额不足**（唯一功能阻塞，见第五节）。
-2. 早期版本把 API Key 明文写在 `main.py` 并提交进了公开仓库 —— 本轮已从代码移除并改为 `.env` 注入，但**历史提交里仍然存在**，务必轮换 Key。
+2. 早期版本把 API Key 明文写在 `main.py` 并提交进了 **GitHub 公开仓库** —— 本轮已从代码移除并改为 `.env` 注入，但**历史提交里仍然存在**，务必轮换 Key。
 3. 对话历史与审批现场存在进程内存（`InMemorySaver`），容器重启即丢失；`chat_history.json` 打在镜像里，写入不持久。
 4. 登录账号明文硬编码（考试演示用）；CORS 为 `allow_origins=["*"]` + `allow_credentials=True`，属不规范组合。
 5. `云端部署项目背景.md` 与本文档重复，可删。
