@@ -15,8 +15,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装依赖，利用 Docker 层缓存
+# PIP_INDEX_URL 可切换镜像源：国内 ECS 构建时用阿里云源，境外 CI 用官方源
+ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+        --extra-index-url https://pypi.org/simple \
+        -r requirements.txt
 
 # 复制业务代码（.dockerignore 已排除缓存/本地环境）
 COPY . .
