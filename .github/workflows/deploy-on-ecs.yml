@@ -17,6 +17,7 @@ jobs:
   deploy:
     name: 传输源码并在 ECS 构建
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -41,7 +42,7 @@ jobs:
           target: ${{ secrets.DEPLOY_PATH }}
           overwrite: true
 
-      - name: 服务器构建并启动
+      - name: 服务器构建镜像
         uses: appleboy/ssh-action@v1.0.3
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
@@ -49,7 +50,8 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          command_timeout: 30m
+          # 2核2G 机器首次构建（pip 下载 1.3GB 依赖）实测需要 25 分钟以上，别设太小
+          command_timeout: 60m
           envs: DEPLOY_PATH
           script: |
             set -e
@@ -69,7 +71,22 @@ jobs:
               echo "::error title=ECS 构建失败::${msg}"
               exit 1
             fi
+            echo "镜像构建完成"
+            docker images | grep amiko || true
 
+      - name: 启动容器
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 15m
+          envs: DEPLOY_PATH
+          script: |
+            set -e
+            cd "${DEPLOY_PATH}"
             docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
             docker image prune -f
             docker compose -f docker-compose.yml -f docker-compose.build.yml ps

@@ -363,14 +363,34 @@ def history_api(user_id: str):
     return {"messages": user_histories.get(user_id, [])}
 
 
+def friendly_error(exc: Exception) -> str:
+    """把大模型侧的错误翻译成用户能看懂的一句话，避免前端只显示 500。"""
+    text = repr(exc)
+    if "Insufficient Balance" in text or "402" in text:
+        return "模型服务调用失败：DeepSeek 账户余额不足（402），请充值或更换 API Key。"
+    if "401" in text or "Unauthorized" in text or "invalid_api_key" in text:
+        return "模型服务调用失败：DeepSeek API Key 无效（401），请检查 DEEPSEEK_API_KEY 配置。"
+    if "Timeout" in text or "timed out" in text:
+        return "模型服务调用超时，请稍后重试。"
+    return f"模型服务调用失败：{type(exc).__name__}"
+
+
 @app.post("/chat")
 async def chat_api(body: ChatRequest):
-    return await chat(body.user_id, body.question)
+    try:
+        return await chat(body.user_id, body.question)
+    except Exception as exc:  # 模型侧异常不能裸奔成 500
+        print("【chat】调用失败：", repr(exc))
+        return {"status": "error", "answer": friendly_error(exc)}
 
 
 @app.post("/approve")
 async def approve_api(body: ApproveRequest):
-    return await approve(body.user_id, body.decision)
+    try:
+        return await approve(body.user_id, body.decision)
+    except Exception as exc:
+        print("【approve】调用失败：", repr(exc))
+        return {"status": "error", "answer": friendly_error(exc)}
 
 
 # ---------- 控制台演示：对应试卷第 2 题各小题 ----------
