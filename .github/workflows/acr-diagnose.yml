@@ -1,0 +1,70 @@
+name: ACR 连接诊断（手动触发）
+
+# 专门用来定位 "login attempt ... 403 Forbidden"。
+# 用法：仓库 Actions 页面 -> 左侧 "ACR 连接诊断（手动触发）" -> Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: 从 GitHub Runner 侧探测 ACR
+    runs-on: ubuntu-latest
+    steps:
+      - name: 0) Runner 出口 IP 与 DNS 解析
+        run: |
+          echo "出口 IP: $(curl -s --max-time 15 https://api.ipify.org || echo 获取失败)"
+          echo "DNS 解析:"
+          getent hosts "${ACR_REGISTRY:-registry.cn-beijing.aliyuncs.com}" || echo "解析失败"
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+
+      - name: 1) 匿名访问 /v2/（只看仓库是否可达）
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+        run: |
+          echo "--- 响应头 ---"
+          curl -sS -i --max-time 25 "https://${ACR_REGISTRY}/v2/" | sed -n '1,15p'
+          echo "期望：401 + WWW-Authenticate: Bearer realm=...；"
+          echo "若这里是 403，说明是 IP/网络层被拦（访问控制白名单或地域限制），与密码无关。"
+
+      - name: 2) 用凭证换取 token（隔离「凭证错」与「IP 被拦」）
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -e
+          hdr=$(curl -sS -i --max-time 25 "https://${ACR_REGISTRY}/v2/" | tr -d '\r')
+          realm=$(echo "$hdr" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
+          service=$(echo "$hdr" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
+          echo "realm   = ${realm}"
+          echo "service = ${service}"
+          url="${realm}?service=${service}&scope=repository:amiko-project/backend:pull,push"
+          body=$(curl -sS --max-time 25 -u "${ACR_USERNAME}:${ACR_PASSWORD}" -w '\n__HTTP__%{http_code}' "$url" || true)
+          code=$(echo "$body" | sed -n 's/.*__HTTP__//p')
+          payload=$(echo "$body" | sed 's/__HTTP__.*//' | sed -E 's/"token":"[^"]*"/"token":"<hidden>"/g' | cut -c1-400)
+          echo "鉴权响应码 = ${code}"
+          echo "响应内容 = ${payload}"
+          echo "→ 200 且有 token：凭证正确，问题 100% 在 IP/访问控制"
+          echo "→ 401：用户名或密码不对（或用了 RAM 子账号却填了主账号名）"
+
+      - name: 3) docker login 详细输出
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          echo "${ACR_PASSWORD}" | docker login "${ACR_REGISTRY}" -u "${ACR_USERNAME}" --password-stdin && echo "✅ 登录成功" || echo "❌ 登录失败（见上方 docker 输出）"
+
+      - name: 4) 顺带验证 SSH 到 ECS 是否正常
+        uses: appleboy/ssh-action@v1.0.3
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            echo "SSH OK: $(whoami)@$(hostname)"
+            docker --version
+            docker compose version 2>/dev/null || echo "docker compose plugin 缺失"
+            ls -la "${{ secrets.DEPLOY_PATH }}" || true

@@ -1,18 +1,42 @@
+# 生产环境编排文件：由 CI scp 到服务器 /opt/app 后执行
+# 镜像地址与 tag 通过环境变量注入，便于回滚（不改文件即可切换版本）
+# 注意：原来的 env_file: .env 已去掉——服务器上缺 .env 时 compose 会直接报错退出，
+#       现在改为可选变量注入（/opt/app/.env 存在时 compose 会自动读取用于变量替换）。
 services:
   backend:
-    image: registry.cn-beijing.aliyuncs.com/amiko-project/backend:latest
+    image: ${ACR_REGISTRY:-registry.cn-beijing.aliyuncs.com}/amiko-project/backend:${IMAGE_TAG:-latest}
     container_name: my_backend
     restart: always
-    env_file:
-      - .env
     expose:
       - "8000"
+    environment:
+      TZ: Asia/Shanghai
+      # 服务器 /opt/app/.env 里配了就用服务器的，没配则用镜像内的默认值
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      # 持久化向量库，避免每次重启重新 embedding
+      - chroma_data:/app/chroma_db
+    mem_limit: 1300m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
-    image: registry.cn-beijing.aliyuncs.com/amiko-project/frontend:latest
+    image: ${ACR_REGISTRY:-registry.cn-beijing.aliyuncs.com}/amiko-project/frontend:${IMAGE_TAG:-latest}
     container_name: my_frontend
     restart: always
     ports:
       - "80:80"
     depends_on:
       - backend
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  chroma_data:

@@ -6,7 +6,6 @@ __pycache__/
 *.pyc
 .idea/
 chroma_db/
-rag_source/
 
 # 前端依赖和打包产物
 node_modules/

@@ -3,43 +3,174 @@ name: Build and Deploy to Aliyun ECS
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
+# 同一时间只跑一条部署流水线，避免两次 push 交叉部署
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  NAMESPACE: amiko-project
 
 jobs:
-  build-and-deploy:
+  build-and-push:
+    name: 构建并推送镜像
     runs-on: ubuntu-latest
-    env:
-      ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
-      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Login to ACR, Build and Push (Pure Shell)
-        run: |
-          echo "Registry length is: ${#ACR_REGISTRY}"
-          
-          # 推送必须登录（即使是公开仓库）
-          echo "$ACR_PASSWORD" | docker login $ACR_REGISTRY -u "$ACR_USERNAME" --password-stdin
-          
-          # 构建后端
-          docker build -t $ACR_REGISTRY/amiko-project/backend:latest ./backend
-          docker push $ACR_REGISTRY/amiko-project/backend:latest
-          
-          # 构建前端
-          docker build -t $ACR_REGISTRY/amiko-project/frontend:latest ./frontend
-          docker push $ACR_REGISTRY/amiko-project/frontend:latest
+      - name: 计算镜像 tag
+        id: vars
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy on ECS via SSH
+      - name: 预检 - 校验 Secrets 与 ACR 连通性
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -e
+          echo "ACR_REGISTRY = '${ACR_REGISTRY}' (长度 ${#ACR_REGISTRY})"
+          echo "ACR_USERNAME = '${ACR_USERNAME}'"
+          echo "ACR_PASSWORD 长度 = ${#ACR_PASSWORD}"
+          [ -n "${ACR_REGISTRY}" ] || { echo "::error::ACR_REGISTRY 为空"; exit 1; }
+          [ -n "${ACR_USERNAME}" ] || { echo "::error::ACR_USERNAME 为空"; exit 1; }
+          [ -n "${ACR_PASSWORD}" ] || { echo "::error::ACR_PASSWORD 为空"; exit 1; }
+          case "${ACR_PASSWORD}" in
+            *[!A-Za-z0-9]*) echo "::warning::ACR_PASSWORD 含非字母数字字符，若登录失败请重置为纯字母数字密码" ;;
+          esac
+          echo "Runner 出口 IP: $(curl -s --max-time 15 https://api.ipify.org || echo 未知)"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://${ACR_REGISTRY}/v2/" || echo 000)
+          echo "GET https://${ACR_REGISTRY}/v2/ -> ${code} (401 = 仓库正常，需要鉴权)"
+          [ "${code}" != "000" ] || { echo "::error::无法连通 ACR 域名，检查 ACR_REGISTRY 是否写错"; exit 1; }
+
+      - name: 登录 ACR（带重试）
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -e
+          for i in 1 2 3; do
+            echo "--- 第 ${i} 次尝试登录 ${ACR_REGISTRY} ---"
+            if echo "${ACR_PASSWORD}" | docker login "${ACR_REGISTRY}" -u "${ACR_USERNAME}" --password-stdin; then
+              echo "✅ ACR 登录成功"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "---------------------------------------------"
+          echo "❌ ACR 登录失败。403 Forbidden 常见原因（按概率排序）："
+          echo "  1) ACR 控制台『访问控制』开启了公网访问白名单，GitHub Runner 的境外动态 IP 不在名单内"
+          echo "  2) 账号在华北2 没有个人版实例，或命名空间不在此实例下"
+          echo "  3) 固定密码被重置 / 含特殊字符被 shell 吞掉"
+          echo "  4) 应改用 RAM 子账号的 AccessKey（阿里云推荐的 CI 鉴权方式）"
+          echo "---------------------------------------------"
+          echo "::error::ACR 登录失败，请运行 ACR 连接诊断工作流排查"
+          exit 1
+
+      - name: 构建并推送后端镜像
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+        run: |
+          set -e
+          REG="${ACR_REGISTRY}/${NAMESPACE}"
+          docker build -t "${REG}/backend:latest" -t "${REG}/backend:${GITHUB_SHA::7}" ./backend
+          docker push "${REG}/backend:latest"
+          docker push "${REG}/backend:${GITHUB_SHA::7}"
+
+      - name: 构建并推送前端镜像
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+        run: |
+          set -e
+          REG="${ACR_REGISTRY}/${NAMESPACE}"
+          docker build -t "${REG}/frontend:latest" -t "${REG}/frontend:${GITHUB_SHA::7}" ./frontend
+          docker push "${REG}/frontend:latest"
+          docker push "${REG}/frontend:${GITHUB_SHA::7}"
+
+  deploy:
+    name: 部署到 ECS
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: 确保部署目录存在
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
+          script: mkdir -p "${{ secrets.DEPLOY_PATH }}"
+
+      - name: 同步 docker-compose.yml 到服务器
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.yml"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
+
+      - name: 服务器拉取镜像并重启
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.tag }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
           command_timeout: 10m
+          envs: ACR_REGISTRY,ACR_USERNAME,ACR_PASSWORD,IMAGE_TAG,DEPLOY_PATH
           script: |
-            cd ${{ secrets.DEPLOY_PATH }}
-            # 👇 因为仓库是公开的，这里直接去掉 docker login，直接拉取
-            docker compose pull
-            docker compose up -d
+            set -e
+            cd "${DEPLOY_PATH}"
+
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE="docker-compose"
+            else
+              echo "服务器上没有 docker compose，请安装 docker-compose-plugin"
+              exit 1
+            fi
+
+            # 私有仓库拉取必须登录（个人版默认是私有仓库）
+            echo "${ACR_PASSWORD}" | docker login "${ACR_REGISTRY}" -u "${ACR_USERNAME}" --password-stdin
+
+            export ACR_REGISTRY IMAGE_TAG
+            echo "部署版本 IMAGE_TAG=${IMAGE_TAG}"
+            $COMPOSE pull
+            $COMPOSE up -d --remove-orphans
+
             docker image prune -f
+            $COMPOSE ps
+
+      - name: 冒烟检查
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            echo "--- 等待容器就绪 ---"
+            for i in $(seq 1 30); do
+              if curl -fsS -o /dev/null http://127.0.0.1/; then break; fi
+              sleep 3
+            done
+            echo "前端首页:  $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)"
+            echo "后端 /api: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/api/)"
+            docker inspect -f 'backend health = {{.State.Health.Status}}' my_backend || true
+            docker logs --tail 30 my_backend || true

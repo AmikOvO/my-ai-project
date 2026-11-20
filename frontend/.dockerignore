@@ -1,0 +1,8 @@
+# 必须排除：本地（Windows）node_modules 会覆盖容器内装好的 Linux 原生模块
+# （@rollup/rollup-*、esbuild 等），导致 npm run build 报 "Cannot find module @rollup/rollup-linux-x64-gnu"
+node_modules/
+dist/
+.vite/
+.env
+.env.*
+npm-debug.log*

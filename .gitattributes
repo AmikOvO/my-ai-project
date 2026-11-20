@@ -1,0 +1,5 @@
+# 统一使用 LF 换行，避免 Windows 上的 CRLF 进入镜像后导致脚本/配置文件解析异常
+* text=auto eol=lf
+*.ico binary
+*.png binary
+*.jpg binary

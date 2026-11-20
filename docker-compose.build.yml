@@ -1,0 +1,19 @@
+# 兜底方案：在 ECS 上直接构建（完全不依赖 ACR 和 GitHub 网络）
+#
+# 什么时候用：GitHub Actions 推送到阿里云 ACR 一直 403，且短期无法调整访问控制时。
+# 用法（在服务器 /opt/app 且已 git clone 本项目的前提下）：
+#   cd /opt/app
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# 注意：2核2G 内存构建 chromadb 依赖可能 OOM，建议先加 2G swap：
+#   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+services:
+  backend:
+    build:
+      context: ./backend
+    image: amiko-backend:local
+
+  frontend:
+    build:
+      context: ./frontend
+    image: amiko-frontend:local

@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import chromadb
@@ -24,8 +25,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel
 
-# 1. 配置 DeepSeek api key
-os.environ["DEEPSEEK_API_KEY"] = "sk-1fa0f532b23f4306aeee3460fbea76d3"
+# 1. 配置 DeepSeek api key（优先读环境变量，便于在服务器 .env 里替换，无需重新打镜像）
+if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+    os.environ["DEEPSEEK_API_KEY"] = "sk-1fa0f532b23f4306aeee3460fbea76d3"
 
 DATA_DIR = Path("data")
 HISTORY_FILE = Path("chat_history.json")
@@ -36,7 +38,30 @@ USERS = {
     "kefu01": {"password": "123456", "name": "客服一号"},
 }
 
-app = FastAPI()
+
+def ensure_rag_ready():
+    """容器里 chroma_db 是空的（已被 .gitignore 排除），启动时自动建库。
+
+    否则第一次 RAG 检索会抛 InvalidCollectionException 直接 500。
+    """
+    try:
+        client = chromadb.PersistentClient(path="chroma_db")
+        collection = client.get_or_create_collection("mcp_intro")
+        if collection.count() == 0:
+            print("【RAG】向量库为空，开始构建…")
+            build_vector_store()
+        print("【RAG】向量库就绪，共", collection.count(), "个文本块")
+    except Exception as exc:  # 兜底：初始化失败也不能让整个服务起不来
+        print("【RAG】向量库初始化失败，RAG 检索将降级：", repr(exc))
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    ensure_rag_ready()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
