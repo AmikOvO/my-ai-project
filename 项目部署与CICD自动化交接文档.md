@@ -124,8 +124,8 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
 docker exec my_backend printenv DEEPSEEK_API_KEY   # 确认已注入
 ```
 
-> 代码里仍保留了一个硬编码的默认 Key 作为兜底：`/opt/app/.env` 不存在或为空时才用默认值。
-> 注意该默认 Key 已进入 Git 历史和公开仓库，**建议轮换并删除代码中的默认值**。
+> 代码中**已删除硬编码 Key**，只认环境变量；服务器 `/opt/app/.env` 已写入当前 Key（600 权限，不进仓库）。
+> 切记：该 Key 此前明文提交在公开仓库里，**必须去 DeepSeek 控制台轮换**，否则任何人都能拿它刷额度。
 
 ---
 
@@ -164,7 +164,7 @@ cd /opt/app && docker compose -f docker-compose.yml -f docker-compose.build.yml 
 ## 八、已知遗留（不影响本次上线）
 
 1. **DeepSeek 余额不足**（唯一功能阻塞，见第五节）。
-2. API Key 硬编码在 `main.py`，且已进入公开仓库 Git 历史 → 建议轮换。
+2. 早期版本把 API Key 明文写在 `main.py` 并提交进了公开仓库 —— 本轮已从代码移除并改为 `.env` 注入，但**历史提交里仍然存在**，务必轮换 Key。
 3. 对话历史与审批现场存在进程内存（`InMemorySaver`），容器重启即丢失；`chat_history.json` 打在镜像里，写入不持久。
 4. 登录账号明文硬编码（考试演示用）；CORS 为 `allow_origins=["*"]` + `allow_credentials=True`，属不规范组合。
 5. `云端部署项目背景.md` 与本文档重复，可删。

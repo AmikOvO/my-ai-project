@@ -25,9 +25,13 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel
 
-# 1. 配置 DeepSeek api key（优先读环境变量，便于在服务器 .env 里替换，无需重新打镜像）
+# 1. DeepSeek api key 一律从环境变量读取（服务器 /opt/app/.env），代码里不再保留明文
+#    原因：硬编码的 Key 会随仓库公开泄露，被他人盗用产生费用
 if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
-    os.environ["DEEPSEEK_API_KEY"] = "sk-1fa0f532b23f4306aeee3460fbea76d3"
+    print(
+        "【警告】未配置 DEEPSEEK_API_KEY。"
+        "请在服务器 /opt/app/.env 中写入 DEEPSEEK_API_KEY=sk-xxx 后执行 docker compose up -d。"
+    )
 
 DATA_DIR = Path("data")
 HISTORY_FILE = Path("chat_history.json")
@@ -366,6 +370,8 @@ def history_api(user_id: str):
 def friendly_error(exc: Exception) -> str:
     """把大模型侧的错误翻译成用户能看懂的一句话，避免前端只显示 500。"""
     text = repr(exc)
+    if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return "服务未配置 DEEPSEEK_API_KEY，请在服务器 /opt/app/.env 中配置后重启容器。"
     if "Insufficient Balance" in text or "402" in text:
         return "模型服务调用失败：DeepSeek 账户余额不足（402），请充值或更换 API Key。"
     if "401" in text or "Unauthorized" in text or "invalid_api_key" in text:
