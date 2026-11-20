@@ -63,14 +63,31 @@ jobs:
             fi
             sleep 5
           done
-          echo "---------------------------------------------"
-          echo "❌ ACR 登录失败。403 Forbidden 常见原因（按概率排序）："
-          echo "  1) ACR 控制台『访问控制』开启了公网访问白名单，GitHub Runner 的境外动态 IP 不在名单内"
-          echo "  2) 账号在华北2 没有个人版实例，或命名空间不在此实例下"
-          echo "  3) 固定密码被重置 / 含特殊字符被 shell 吞掉"
-          echo "  4) 应改用 RAM 子账号的 AccessKey（阿里云推荐的 CI 鉴权方式）"
-          echo "---------------------------------------------"
-          echo "::error::ACR 登录失败，请运行 ACR 连接诊断工作流排查"
+
+          echo ""
+          echo "================ 自动诊断：凭证在鉴权服务侧是否有效 ================"
+          hdr=$(curl -sS -i --max-time 25 "https://${ACR_REGISTRY}/v2/" | tr -d '\r' || true)
+          realm=$(echo "$hdr" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
+          service=$(echo "$hdr" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
+          echo "realm   = ${realm}"
+          echo "service = ${service}"
+          tok_code=$(curl -sS -o /tmp/token.json -w '%{http_code}' --max-time 25 \
+            -u "${ACR_USERNAME}:${ACR_PASSWORD}" \
+            "${realm}?service=${service}&scope=repository:${NAMESPACE}/backend:pull,push" || echo 000)
+          echo "鉴权接口 HTTP = ${tok_code}"
+          sed -E 's/"token":"[^"]*"/"token":"<hidden>"/g' /tmp/token.json | cut -c1-300 || true
+          echo "=============================================================="
+          echo ""
+          if [ "${tok_code}" = "200" ]; then
+            echo "结论：凭证正确（已拿到 token），docker login 仍失败 => 是网络层/访问控制拦截，不是密码问题。"
+            echo "下一步：ACR 控制台 -> 访问控制 -> 关闭『公网访问入口』白名单，或白名单设为 0.0.0.0/0。"
+            echo "       若确认已关闭仍 403，说明该账号的个人版实例不允许境外 IP 直连，"
+            echo "       请改用 ECS self-hosted runner，或走 docker-compose.build.yml 在服务器本地构建。"
+          else
+            echo "结论：鉴权接口拒绝了凭证（4xx），凭证或实例域名不匹配。"
+            echo "下一步：确认登录域名与实例类型一致；固定密码是否被重置；RAM 子账号需授予 AliyunContainerRegistryFullAccess。"
+          fi
+          echo "::error::ACR 登录失败（诊断输出见上）"
           exit 1
 
       - name: 构建并推送后端镜像
