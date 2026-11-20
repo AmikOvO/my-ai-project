@@ -2,138 +2,170 @@
 
 > 更新时间：2026-11-20
 > 仓库：`https://github.com/AmikOvO/my-ai-project`（分支 `main`）
-> 服务器：阿里云 ECS `47.95.28.173`（华北2，Ubuntu 22.04），部署目录 `/opt/app`
-
-## 一、当前状态
-
-上一轮交接卡在 `docker login` 报 `403 Forbidden`。本轮排查发现：**除了这个 403，代码和镜像构建配置里还有 6 处必然导致后续失败的问题**，已全部修复（详见第二节）。修完之后，整条链路只剩下「ACR 从 GitHub 网络侧不可达」这一个外部因素需要你在控制台处理。
+> 服务器：阿里云 ECS `47.95.28.173`（华北2，Ubuntu 22.04，2核1.7G），部署目录 `/opt/app`
+> **线上地址：http://47.95.28.173（已可访问，容器 healthy）**
 
 ---
 
-## 二、本轮修复清单
+## 一、当前状态：已上线 ✅
+
+| 项 | 状态 |
+|----|------|
+| 前端页面 | ✅ `http://47.95.28.173` 200 |
+| 前后端联调 `/api` | ✅ 200，返回 `{"message":"企业智能客服 RAG 系统"}` |
+| 登录接口 | ✅ 200（admin/123456） |
+| RAG 向量库 | ✅ 启动时自动建库，日志 `【RAG】向量库就绪，共 4 个文本块` |
+| 容器健康 | ✅ backend / frontend 均 healthy |
+| CI/CD | ✅ push 到 main 自动部署成功（GitHub Actions 绿色） |
+| 大模型对话 | ❌ **DeepSeek 账户余额不足（402 Insufficient Balance）**，需充值或换 Key |
+
+> 最后一步只差钱：接口链路已全部打通，模型侧返回 402。见第五节如何换 Key。
+
+**部署方式已从「GitHub 构建 + ACR」改为「GitHub 传源码 + ECS 本地构建」**，原因见第三节。
+
+---
+
+## 二、本轮修复清单（14 项，全部已验证）
 
 | # | 问题 | 后果 | 修复 |
 |---|------|------|------|
-| 1 | `backend/requirements.txt` 是 **UTF-16LE** 编码（不是 UTF-8） | `pip install -r requirements.txt` 100% 失败：`Invalid requirement: '\x00a\x00i\x00o...'`。这是 403 修好后的**第一个拦路虎** | 转成 UTF-8 + LF，123 个包完整保留 |
-| 2 | `frontend/src/api/request.js` 写死 `baseURL: 'http://127.0.0.1:8000'` | 线上用户的浏览器会去请求**自己电脑**的 8000 端口，登录/对话全部挂掉 | 改为 `import.meta.env.VITE_API_BASE \|\| '/api'`，走 nginx 反代 |
-| 3 | `timeout: 5000` | 大模型首字生成普遍 >5s，对话必然超时 | 改 120s（nginx 侧同步放到 300s） |
-| 4 | 前端 `Dockerfile` 用 `node:18-alpine`，但 `package.json` 要求 `^22.18`，vite 8 不支持 Node 18 | `npm run build` 直接报错 | 换 `node:22-alpine` + `npm ci` |
-| 5 | 没有 `.dockerignore` | 本地 Windows 的 `node_modules` 被 `COPY . .` 覆盖进容器，rollup/esbuild 原生模块变体不匹配，报 `Cannot find module @rollup/rollup-linux-x64-gnu` | 新增 `frontend/.dockerignore`、`backend/.dockerignore` |
-| 6 | `backend/rag_source/` 被 `.gitignore` 排除；`chroma_db/` 也没进镜像 | CI checkout 出来的代码里**没有 RAG 源文件**，首次 RAG 检索抛 `InvalidCollectionException` → `/chat` 500 | `rag_source` 纳入版本控制；`main.py` 增加 lifespan 启动钩子，向量库为空时自动建库 |
-| 7 | 后端 `Dockerfile` 用 `python:3.10-slim`，但依赖是 3.13 环境导出的（`numpy 2.5.4`/`chromadb 1.5.9` 等） | 大概率找不到匹配 wheel 或解析失败 | 换 `python:3.13-slim`；构建时预热 chromadb 默认向量模型，避免 ECS 上首次 embedding 联网下载超时 |
-| 8 | `docker-compose.yml` 里 `env_file: .env` | 服务器上 `.env` 一旦不存在，compose 直接报错退出（本地 `.env` 是 0 字节空文件，也没进仓库） | 去掉强依赖，改为可选变量注入 |
-| 9 | 部署脚本假设服务器上已有正确版本的 `docker-compose.yml` | 仓库改了 compose 但服务器还是旧的 | 部署时自动 `scp` 覆盖 |
-| 10 | 部署时拉取镜像**没有登录**（个人版仓库默认私有） | `docker compose pull` 报 unauthorized/403 | 服务器端部署前先 `docker login` |
-| 11 | 镜像只有 `:latest`，无版本号 | 无法回滚 | 同时推送 `:<7位sha>`，compose 支持 `IMAGE_TAG` 指定版本 |
-| 12 | 无资源限制 | 2核2G 上前端+后端+chromadb 可能被 OOM Killer 干掉 | 后端 `mem_limit 1300m`、前端 `128m`，日志轮转 10m×3 |
+| 1 | `backend/requirements.txt` 是 **UTF-16LE** 编码 | `pip install` 100% 失败：`Invalid requirement: '\x00a\x00i\x00o...'` | 转 UTF-8 + LF |
+| 2 | `requirements.txt` 含 **`pywin32==312`**（Windows 专属包，来自本地 pip freeze） | Linux 镜像构建报 `No matching distribution found for pywin32==312` | 移除（本次实测就卡在这里） |
+| 3 | 前端 `baseURL: 'http://127.0.0.1:8000'` 写死 | 线上用户浏览器去请求**自己电脑**的 8000 端口，登录/对话全挂 | 改为 `/api`，由 nginx 反代；vite 增加 dev 代理 |
+| 4 | axios `timeout: 5000` | 大模型首字普遍 >5s，对话必然超时 | 120s（nginx 提高到 300s） |
+| 5 | 前端镜像 `node:18` 但 `engines ^22.18` + vite 8 | `npm run build` 报错 | 换 `node:22-alpine` + `npm ci` |
+| 6 | 缺 `.dockerignore` | Windows 的 `node_modules` 覆盖进容器，原生模块变体不匹配 | 新增前后端 `.dockerignore` |
+| 7 | 后端镜像 `python:3.10`，依赖却是 3.13 环境导出 | wheel 不匹配 | 换 `python:3.13-slim` |
+| 8 | `rag_source/` 被 `.gitignore` 排除 | 镜像里没有 RAG 源文件 | 纳入版本控制 |
+| 9 | `chroma_db/` 不在镜像，首次 RAG 查询必 500 | `InvalidCollectionException` | `main.py` 增加 lifespan 启动钩子自动建库 |
+| 10 | chromadb 首次 embedding 要联网下载 ONNX 模型，国内 ECS 拉不动 | RAG 不可用 | 模型（88MB）预先放在 `/opt/app/chroma-model`，以只读卷挂进容器 |
+| 11 | `compose` 里 `env_file: .env` | 服务器缺 `.env` 时 compose 直接退出（本地 `.env` 是 0 字节） | 去掉强依赖，改可选变量注入 |
+| 12 | 部署链路依赖服务器上手工存在的 compose 文件，而 `/opt/app` 实际是**空的** | 即使 ACR 通了，`docker compose pull` 也会报没有配置文件 | 部署时自动同步源码/compose |
+| 13 | 模型侧异常直接抛 500 | 前端只显示「请求失败」 | 后端捕获并返回可读原因（402/401/超时） |
+| 14 | CI 打包 `tar` 输出到仓库目录内 | tar 读到自己，退出码 1，流水线直接失败 | 归档写到 `/tmp` |
+| 15 | 构建步骤 `command_timeout: 30m` | 2核机首次构建（1.3GB 依赖）需 >30 分钟，被中断 | 放宽到 60m，并拆成「构建」「启动」两步 |
 
-新增文件：
-- `.github/workflows/acr-diagnose.yml`：**手动触发**的 ACR 连接诊断（专门解决 403）
-- `docker-compose.build.yml`：兜底方案，绕开 ACR 直接在 ECS 上构建
-- `.env.example`、`backend/.dockerignore`、`frontend/.dockerignore`
-
----
-
-## 三、关于 403 Forbidden：一个关键结论
-
-**403 几乎不可能是密码错。** Docker Registry 的语义是：
-
-- 凭证错误 → `401 Unauthorized` / `incorrect username or password`
-- 请求被网络层或 ACL 拦截 → `403 Forbidden`
-
-本轮实测（国内网络）：
-
-```
-$ curl -i https://registry.cn-beijing.aliyuncs.com/v2/
-HTTP/1.1 401 Unauthorized
-Www-Authenticate: Bearer realm="https://dockerauth.cn-hangzhou.aliyuncs.com/auth",
-                          service="registry.aliyuncs.com:cn-beijing:26842"
-```
-
-说明：域名可达、仓库服务正常、通用域名 `registry.cn-beijing.aliyuncs.com` 没有被废弃。
-
-结合「本地同样凭证能登录成功」这一事实，唯一变量就是**请求来源 IP**：GitHub 托管 Runner 在境外（Azure），而你的本地在国内。
-
-因此上一轮交接里的「任务 2（改密码）」「任务 3（改账号名）」「任务 4（RAM 子账号 AccessKey）」**都解决不了 403**——它们解决的是 401。RAM AccessKey 只适合替代固定密码做鉴权，换不掉 IP 白名单。
+新增文件：`.github/workflows/deploy-on-ecs.yml`、`.github/workflows/acr-diagnose.yml`、`docker-compose.build.yml`、`.env.example`、`.gitattributes`、前后端 `.dockerignore`。
 
 ---
 
-## 四、还剩 3 件事需要你在控制台/本地操作
+## 三、关于 403 Forbidden：结论已有实证
 
-### 第 1 步（最可能直接解决）关闭 ACR 公网访问控制
+原始报错：`login attempt to https://registry.cn-beijing.aliyuncs.com/v2/ failed with status: 403 Forbidden`
 
-阿里云 ACR 控制台 → 选华北2(北京) → 目标实例/命名空间 → 左侧 **访问控制** → 检查 **公网访问入口 / 公网访问控制白名单**：
+上一轮的猜测（改密码、改账号名、RAM AccessKey）**方向都是错的**——它们解决的是 401，不是 403。
 
-- 若开启且填了具体 IP → 关闭它，或把白名单改成 `0.0.0.0/0`（GitHub Runner 的 IP 是动态的，逐个放行不可维护）
-- 同时确认「仓库属性」不是仅限 VPC 访问
+本轮用流水线自动抓取到的实证：
 
-### 第 2 步 用诊断工作流拿到实证
+```
+token_http=200 | 凭证有效，登录被网络层拦截
+realm=https://dockerauth.cn-hangzhou.aliyuncs.com/auth
+service=registry.aliyuncs.com:cn-beijing:26842
+resp={"access_token":"***...            ← 阿里云鉴权服务已签发 token
+```
 
-仓库 Actions 页面 → 左侧 **ACR 连接诊断（手动触发）** → Run workflow。
+也就是说：**用户名密码完全正确、鉴权服务也认了、token 都发下来了**，但拿着 token 访问 registry 时被拒。这只能是网络层/访问控制层面的拦截（GitHub 托管 Runner 在境外，其动态 IP 被 ACR 的公网访问控制挡掉，或该个人版实例不允许境外直连）。
 
-它会打印：Runner 出口 IP、`/v2/` 匿名响应、用你的凭证换 token 的结果、`docker login` 详细输出、以及 SSH 到 ECS 的连通性。判读方式：
+因此本项目改为 **ECS 本地构建**，彻底绕开这条跨境链路：
+- 优点：不再依赖 ACR，构建走国内网络（阿里云 PyPI 源 + npmmirror），镜像层缓存在服务器上，改了代码二次构建只要 1-2 分钟
+- 代价：构建占用 ECS 的 CPU/内存（首次约 25 分钟；期间站点会略慢）
 
-- token 接口返回 200 且有 token，但 `docker login` 仍 403 → **确定是 IP/ACL 拦截**，回到第 1 步或走兜底方案
-- token 接口返回 401 → 才是凭证问题（此时才需要重置密码 / 换 RAM AccessKey）
-- SSH 步骤失败 → 与 ACR 无关，单独查安全组和密钥
+如果以后仍想用 ACR 方案（比如买了国内 self-hosted runner），把 `.github/workflows/deploy.yml` 的 `on: workflow_dispatch` 改回 `push: branches: [main]` 即可，那个工作流已经写好并在诊断中验证过预检/重试逻辑。
 
-### 第 3 步 提交并触发部署
+---
+
+## 四、现在的部署方式
+
+```
+本地 git push → GitHub Actions
+   ├─ 打包源码（排除 .git / node_modules / dist）→ scp 到 /opt/app
+   ├─ SSH 执行 docker compose -f docker-compose.yml -f docker-compose.build.yml build
+   ├─ docker compose up -d
+   └─ 冒烟检查（首页 200 / /api 200 / 容器健康 / 打印后端日志）
+```
+
+服务器目录结构：
+
+```
+/opt/app
+├── backend/  frontend/  .github/        # 每次部署覆盖
+├── docker-compose.yml                   # 生产编排（镜像名 + 资源限制）
+├── docker-compose.build.yml             # 覆盖层：改为本地构建 + 国内 PyPI 源
+└── chroma-model/all-MiniLM-L6-v2/onnx/  # 向量模型（88MB，一次性上传，不进仓库）
+```
+
+> `chroma-model` 不在仓库里，也不随部署覆盖。若误删，执行
+> `scp -r ~/.cache/chroma/onnx_models/all-MiniLM-L6-v2 deployer@47.95.28.173:/opt/app/chroma-model/`
+> 重新上传（模型已在本地缓存）。
+
+手动部署一次（不等 CI）：
 
 ```bash
-cd D:/Projects/practice/two
-git add -A
-git commit -m "fix: 修复镜像构建与前后端联调问题，加固 CI/CD 流水线"
-git push origin main
-```
-
-push 后流水线顺序：预检 → 登录 ACR → 构建推送 backend/frontend（`latest` + `sha`）→ scp compose → 服务器 pull/up → 冒烟检查。
-
-> 如果第 1 步之后仍 403，最稳的方案是**在 ECS 上装 GitHub self-hosted runner**（构建发生在国内，推送 ACR 走内网 `-vpc` 域名，速度快且不受跨境限制）；
-> 更省事的临时方案是第五节「兜底构建」。
-
----
-
-## 五、兜底方案：完全绕开 ACR
-
-在服务器上执行：
-
-```bash
-# 2核2G 构建 chromadb 依赖容易 OOM，先加 swap
-sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-
+ssh deployer@47.95.28.173
 cd /opt/app
-git clone https://github.com/AmikOvO/my-ai-project.git . 2>/dev/null || git pull
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-可用性验证：`curl -I http://127.0.0.1/`、`docker compose ps`。
+---
+
+## 五、如何恢复对话功能（DeepSeek 余额）
+
+两种都行：
+
+**A. 给原 Key 充值**（最简单）— 到 DeepSeek 控制台充值后立即生效，无需重启。
+
+**B. 换一个新 Key**（不用重新打镜像）：
+
+```bash
+ssh deployer@47.95.28.173
+cd /opt/app
+echo 'DEEPSEEK_API_KEY=sk-你的新key' > .env     # compose 会自动读取该文件做变量替换
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+docker exec my_backend printenv DEEPSEEK_API_KEY   # 确认已注入
+```
+
+> 代码里仍保留了一个硬编码的默认 Key 作为兜底：`/opt/app/.env` 不存在或为空时才用默认值。
+> 注意该默认 Key 已进入 Git 历史和公开仓库，**建议轮换并删除代码中的默认值**。
 
 ---
 
-## 六、上线后验收清单
+## 六、上线验收结果
 
-| 检查项 | 命令 / 操作 | 期望 |
-|--------|-------------|------|
-| 前端可访问 | 浏览器打开 `http://47.95.28.173` | 出现登录页 |
-| 后端反代通 | `curl -s http://47.95.28.173/api/` | `{"message":"企业智能客服 RAG 系统"}` |
-| 登录 | admin / 123456 | 进入对话页，无 F12 报错 |
-| RAG 链路 | 问「stdio transport的优点是什么？」 | 回答带 `[来源：RAG向量库 mcp_intro.md]` |
-| RAG 建库日志 | `docker logs my_backend \| head -40` | 出现 `【RAG】向量库就绪，共 N 个文本块` |
-| MCP 链路 | 问「MCP协议推荐版本是什么？」 | 回答带 `[来源：MCP ...]` |
-| 容器健康 | `docker inspect -f '{{.State.Health.Status}}' my_backend` | `healthy` |
+| 检查项 | 实际结果 |
+|--------|----------|
+| `curl http://47.95.28.173/` | 200 |
+| `curl http://47.95.28.173/api/` | 200 `{"message":"企业智能客服 RAG 系统"}` |
+| `POST /api/login` admin/123456 | 200 `{"user_id":"admin","name":"管理员"}` |
+| `POST /api/chat` RAG 问句 | 200，返回「DeepSeek 余额不足」可读提示（链路已通，卡在额度） |
+| `docker inspect my_backend` | `healthy` |
+| 后端启动日志 | `【RAG】向量库就绪，共 4 个文本块` |
 
-## 七、回滚
+余额恢复后，再按试卷题目问一遍即可：
+- 「stdio transport的优点是什么？」→ 应带 `[来源：RAG向量库 mcp_intro.md]`
+- 「MCP协议推荐版本是什么？」→ 应走 MCP 工具，带 `[来源：MCP ...]`
+- 「帮我删除 mcp_advanced.md」→ 应触发人工审批
+
+---
+
+## 七、回滚 / 重跑
 
 ```bash
-cd /opt/app
-IMAGE_TAG=<上一个 7 位 sha> docker compose up -d
-# 或
-IMAGE_TAG=latest docker compose up -d
+# 回滚到某个提交并重新部署
+git revert <sha> && git push origin main     # 触发自动部署
+
+# 或在服务器上直接重建（不动代码）
+cd /opt/app && docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
+
+查看失败原因：Actions 页面 → 运行记录 → 「ECS 构建失败」注解里会直接带构建日志末尾；也可 `ssh deployer@47.95.28.173 'tail -50 /tmp/build.log'`。
+
+---
 
 ## 八、已知遗留（不影响本次上线）
 
-1. `backend/main.py` 里 DeepSeek API Key 硬编码（现已支持环境变量覆盖，建议在服务器 `/opt/app/.env` 配 `DEEPSEEK_API_KEY=` 后删掉代码里的默认值）。**该 Key 已进入 Git 历史和公开仓库，建议去 DeepSeek 控制台轮换。**
-2. 对话历史/审批现场存在进程内存（`InMemorySaver`），容器重建即丢失；`chat_history.json` 打在镜像里，不可持久化写入。
-3. 登录账号明文硬编码（考试演示用）。CORS 为 `allow_origins=["*"]` + `allow_credentials=True`，属于不规范组合。
-4. `云端部署项目背景.md` 与本文档内容重复，可删。
+1. **DeepSeek 余额不足**（唯一功能阻塞，见第五节）。
+2. API Key 硬编码在 `main.py`，且已进入公开仓库 Git 历史 → 建议轮换。
+3. 对话历史与审批现场存在进程内存（`InMemorySaver`），容器重启即丢失；`chat_history.json` 打在镜像里，写入不持久。
+4. 登录账号明文硬编码（考试演示用）；CORS 为 `allow_origins=["*"]` + `allow_credentials=True`，属不规范组合。
+5. `云端部署项目背景.md` 与本文档重复，可删。
+6. 后端镜像 1.38GB，主要来自 chromadb + onnxruntime + langchain；如需瘦身可考虑多阶段构建或换轻量 embedding 方案。
